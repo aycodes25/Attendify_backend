@@ -1,0 +1,30 @@
+node_modules/
+dist/
+coverage/
+
+# env files
+.env
+.env.test
+.env.production
+.env.local
+
+# face-api models (optional, if you want them downloaded per-machine)
+# models/
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
