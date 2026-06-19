@@ -29,8 +29,8 @@ export class CamerasController {
 
   @Post()
   @Roles('Super Admin', 'Church Admin')
-  async createCamera(@Body() body: { name: string; location: string; rtspUrl: string }) {
-    if (!body.name || !body.location || !body.rtspUrl) {
+  async createCamera(@Body() body: { name: string; location: string; rtsp_url: string }) {
+    if (!body.name || !body.location || !body.rtsp_url) {
       throw new HttpException('Missing name, location, or RTSP URL', HttpStatus.BAD_REQUEST);
     }
 
@@ -39,7 +39,7 @@ export class CamerasController {
       .insert({
         name: body.name,
         location: body.location,
-        rtsp_url: body.rtspUrl,
+        rtsp_url: body.rtsp_url,
         status: 'Offline',
       })
       .select()
@@ -58,7 +58,7 @@ export class CamerasController {
   @Roles('Super Admin', 'Church Admin')
   async updateCamera(
     @Param('id') id: string,
-    @Body() body: { name?: string; location?: string; rtspUrl?: string; status?: string },
+    @Body() body: { name?: string; location?: string; rtsp_url?: string; status?: string },
   ) {
     const client = this.supabaseService.getClient();
 
@@ -75,7 +75,7 @@ export class CamerasController {
     const updateData: any = {};
     if (body.name !== undefined) updateData.name = body.name;
     if (body.location !== undefined) updateData.location = body.location;
-    if (body.rtspUrl !== undefined) updateData.rtsp_url = body.rtspUrl;
+    if (body.rtsp_url !== undefined) updateData.rtsp_url = body.rtsp_url;
     if (body.status !== undefined) updateData.status = body.status;
 
     const { data, error } = await client
@@ -90,7 +90,7 @@ export class CamerasController {
     }
 
     // Restart process if RTSP URL was updated or stream was toggled back Online
-    if (body.rtspUrl !== undefined || body.status === 'Online') {
+    if (body.rtsp_url !== undefined || body.status === 'Online') {
       this.cameraStreamService.stopCameraProcess(id);
       if (data.status === 'Online' || body.status === 'Online') {
         await this.cameraStreamService.startCameraProcess(data.id, data.rtsp_url, data.name);
