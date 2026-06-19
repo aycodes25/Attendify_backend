@@ -29,7 +29,7 @@ export class CamerasController {
 
   @Post()
   @Roles('Super Admin', 'Church Admin')
-  async createCamera(@Body() body: { name: string; location: string; rtsp_url: string }) {
+  async createCamera(@Body() body: { name: string; location: string; rtsp_url: string; resolution?: string; fps?: number }) {
     if (!body.name || !body.location || !body.rtsp_url) {
       throw new HttpException('Missing name, location, or RTSP URL', HttpStatus.BAD_REQUEST);
     }
@@ -58,7 +58,7 @@ export class CamerasController {
   @Roles('Super Admin', 'Church Admin')
   async updateCamera(
     @Param('id') id: string,
-    @Body() body: { name?: string; location?: string; rtsp_url?: string; status?: string },
+     @Body() body: { name?: string; location?: string; rtsp_url?: string; status?: string; resolution?: string; fps?: number },
   ) {
     const client = this.supabaseService.getClient();
 
