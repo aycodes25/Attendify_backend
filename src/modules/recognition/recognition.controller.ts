@@ -17,10 +17,15 @@ export class RecognitionController {
     }
 
     const name = cameraName || 'Live Kiosk';
-    
-    // Process the uploaded buffer
-    await this.recognitionProcessingService.processFrame(null, name, file.buffer);
-    
-    return { success: true, message: 'Frame processed successfully' };
+
+    // Use kiosk-specific path that ALWAYS saves a visitor record
+    const result = await this.recognitionProcessingService.processKioskFrame(name, file.buffer);
+
+    return {
+      success: true,
+      matched: result.matched,
+      memberId: result.memberId || null,
+      message: result.matched ? 'Attendance marked for known member' : 'Visitor captured and saved to pending',
+    };
   }
 }

@@ -17,8 +17,56 @@ export class RecognitionProcessingService {
   ) {}
 
   /**
+   * Processes a kiosk frame — tries face recognition first,
+   * but ALWAYS saves the snapshot as a visitor if no known member is matched.
+   * This guarantees every kiosk capture appears in the Pending visitors tab.
+   */
+  async processKioskFrame(cameraName: string, frameBuffer: Buffer): Promise<{ matched: boolean; memberId?: string }> {
+    this.logger.log(`Kiosk frame received. Buffer size: ${frameBuffer.length}`);
+    try {
+      const detections = await this.faceRecognitionService.processImageBuffer(frameBuffer);
+      this.logger.log(`Kiosk face detections: ${detections.length}`);
+
+      if (detections.length > 0) {
+        const client = this.supabaseService.getClient();
+        const threshold = parseFloat(this.configService.get<string>('RECOGNITION_THRESHOLD') || '0.6');
+
+        for (const det of detections) {
+          const { data: matches, error } = await client.rpc('match_face', {
+            query_embedding: `[${det.descriptor.join(',')}]`,
+            match_threshold: threshold,
+            match_count: 1,
+          });
+
+          if (!error && matches && matches.length > 0) {
+            // Known member — mark attendance
+            await this.markMatchAttendance(matches[0].member_id, cameraName);
+            return { matched: true, memberId: matches[0].member_id };
+          } else {
+            // Detected face but not in database — save as visitor with crop
+            await this.processUnknownVisitor(null, cameraName, frameBuffer, det.croppedBuffer);
+            return { matched: false };
+          }
+        }
+      }
+
+      // No face detected at all — still save the raw snapshot so nothing is lost
+      this.logger.warn(`No face detected by face-api; saving raw snapshot as visitor.`);
+      await this.processUnknownVisitor(null, cameraName, frameBuffer, frameBuffer);
+      return { matched: false };
+    } catch (err) {
+      this.logger.error(`Kiosk frame processing failed`, err);
+      // Even on error try to save snapshot
+      try {
+        await this.processUnknownVisitor(null, cameraName, frameBuffer, frameBuffer);
+      } catch (_) {}
+      return { matched: false };
+    }
+  }
+
+  /**
    * Processes a single image frame buffer for face recognition.
-   * Can be called from CCTV Streams (ffmpeg) or Live Webcams (kiosk).
+   * Used by CCTV streams (ffmpeg). Does NOT force-save.
    */
   async processFrame(cameraId: string | null, cameraName: string, frameBuffer: Buffer) {
     try {
@@ -29,11 +77,10 @@ export class RecognitionProcessingService {
       const threshold = parseFloat(this.configService.get<string>('RECOGNITION_THRESHOLD') || '0.6');
 
       for (const det of detections) {
-        // Query database using pgvector similarity matcher RPC
         const { data: matches, error } = await client.rpc('match_face', {
           query_embedding: `[${det.descriptor.join(',')}]`,
           match_threshold: threshold,
-          match_count: 1
+          match_count: 1,
         });
 
         if (error) {
@@ -42,10 +89,8 @@ export class RecognitionProcessingService {
         }
 
         if (matches && matches.length > 0) {
-          const match = matches[0];
-          await this.markMatchAttendance(match.member_id, cameraName);
+          await this.markMatchAttendance(matches[0].member_id, cameraName);
         } else {
-          // No match: process unrecognized visitor
           await this.processUnknownVisitor(cameraId, cameraName, frameBuffer, det.croppedBuffer);
         }
       }
@@ -179,7 +224,11 @@ export class RecognitionProcessingService {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        this.logger.error(`Visitor insert error: ${JSON.stringify(error)}`);
+        throw error;
+      }
+      this.logger.log(`Visitor saved to database: ${visitor.id}`);
 
       // Broadcast WebSocket notification to dashboard
       const location = cameraId ? await this.getCameraLocation(cameraId) : 'Live Kiosk';
@@ -192,7 +241,7 @@ export class RecognitionProcessingService {
         location
       });
     } catch (err) {
-      this.logger.error(`Failed to record unrecognized visitor`, err);
+      this.logger.error(`Failed to record unrecognized visitor: ${err?.message || err}`);
     }
   }
 
