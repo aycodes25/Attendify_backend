@@ -86,9 +86,15 @@ CREATE TABLE IF NOT EXISTS public.attendance (
   attendance_date DATE NOT NULL DEFAULT CURRENT_DATE,
   check_in_time TIME NOT NULL DEFAULT CURRENT_TIME,
   confidence_score FLOAT,
+  punctuality_status TEXT,
+  minutes_difference INTEGER,
   source TEXT DEFAULT 'camera', -- 'camera' | 'kiosk' | 'manual'
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Add punctuality columns to existing table
+ALTER TABLE public.attendance ADD COLUMN IF NOT EXISTS punctuality_status TEXT;
+ALTER TABLE public.attendance ADD COLUMN IF NOT EXISTS minutes_difference INTEGER;
 
 -- ============================
 -- 6. ROW LEVEL SECURITY (optional but recommended)

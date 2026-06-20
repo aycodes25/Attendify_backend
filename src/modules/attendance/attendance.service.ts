@@ -16,7 +16,6 @@ export class AttendanceService {
         members (
           first_name,
           last_name,
-          full_name,
           department,
           profile_photo_url
         )
@@ -42,9 +41,12 @@ export class AttendanceService {
     let records = data || [];
     if (filters.search) {
       const searchLower = filters.search.toLowerCase();
-      records = records.filter(r => 
-        r.members && (r.members as any).full_name.toLowerCase().includes(searchLower)
-      );
+      records = records.filter(r => {
+        const member = r.members as any;
+        if (!member) return false;
+        const fullName = `${member.first_name || ''} ${member.last_name || ''}`.toLowerCase();
+        return fullName.includes(searchLower);
+      });
     }
 
     return { records, totalCount: count };
@@ -206,7 +208,7 @@ export class AttendanceService {
     
     for (const r of records) {
       const member = r.members as any;
-      const name = member ? `"${member.full_name}"` : 'Unknown';
+      const name = member ? `"${member.first_name || ''} ${member.last_name || ''}"` : 'Unknown';
       const email = member ? `"${member.email || ''}"` : 'Unknown';
       const dept = member ? `"${member.department || ''}"` : 'Unknown';
       

@@ -21,7 +21,7 @@ export class RecognitionProcessingService {
    * but ALWAYS saves the snapshot as a visitor if no known member is matched.
    * This guarantees every kiosk capture appears in the Pending visitors tab.
    */
-  async processKioskFrame(cameraName: string, frameBuffer: Buffer): Promise<{ matched: boolean; memberId?: string }> {
+  async processKioskFrame(cameraName: string, frameBuffer: Buffer): Promise<{ matched: boolean; memberId?: string; alreadyMarked?: boolean }> {
     this.logger.log(`Kiosk frame received. Buffer size: ${frameBuffer.length}`);
     try {
       const detections = await this.faceRecognitionService.processImageBuffer(frameBuffer);
@@ -40,12 +40,12 @@ export class RecognitionProcessingService {
 
           if (!error && matches && matches.length > 0) {
             // Known member — mark attendance
-            await this.markMatchAttendance(matches[0].member_id, cameraName);
-            return { matched: true, memberId: matches[0].member_id };
+            const isAlreadyMarked = await this.markMatchAttendance(matches[0].member_id, cameraName);
+            return { matched: true, memberId: matches[0].member_id, alreadyMarked: isAlreadyMarked };
           } else {
             // Detected face but not in database — save as visitor with crop
             await this.processUnknownVisitor(null, cameraName, frameBuffer, det.croppedBuffer);
-            return { matched: false };
+            return { matched: false, alreadyMarked: false };
           }
         }
       }
@@ -104,14 +104,24 @@ export class RecognitionProcessingService {
    */
   private async markMatchAttendance(memberId: string, cameraName: string) {
     const client = this.supabaseService.getClient();
-    const today = new Date().toISOString().split('T')[0];
-    const currentTime = new Date().toTimeString().split(' ')[0];
+    const now = new Date();
+    // Use local time for logic (important for correct day mapping)
+    const today = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+    const currentTime = now.toTimeString().split(' ')[0];
 
-    // Determine current service type based on day/time or default
-    const serviceType = this.getCurrentServiceType();
+    const activeService = this.getActiveServiceDetails(now);
+    const serviceType = activeService.name;
 
-    // Check duplicate check-in window
-    const duplicateWindowMins = parseInt(this.configService.get<string>('DUPLICATE_WINDOW_MINS') || '60');
+    // Load member name & details early so we can broadcast errors
+    const { data: member } = await client
+      .from('members')
+      .select('first_name, last_name, profile_photo_url')
+      .eq('id', memberId)
+      .single();
+
+    if (!member) return false;
+
+    // Check duplicate check-in window (already marked for this service today)
     const { data: existing } = await client
       .from('attendance')
       .select('*')
@@ -122,17 +132,25 @@ export class RecognitionProcessingService {
 
     if (existing) {
       this.logger.log(`Member ${memberId} already checked in today for ${serviceType}`);
-      return;
+      // Emit live WebSocket event so the kiosk UI shows "Already Marked"
+      this.recognitionGateway.server.emit('visitor_detected', {
+        id: crypto.randomUUID(),
+        alreadyMarked: true,
+        memberName: `${member.first_name} ${member.last_name}`,
+        serviceType,
+        time: currentTime
+      });
+      return true;
     }
 
-    // Load member name & details for check-in
-    const { data: member } = await client
-      .from('members')
-      .select('first_name, last_name, profile_photo_url')
-      .eq('id', memberId)
-      .single();
-
-    if (!member) return;
+    // Calculate punctuality
+    const currentMins = now.getHours() * 60 + now.getMinutes();
+    const startMins = activeService.startTimeHour * 60 + activeService.startTimeMinute;
+    const minutes_difference = currentMins - startMins; // Negative = early, positive = late
+    
+    let punctuality_status = 'On Time';
+    if (minutes_difference < -15) punctuality_status = 'Early';
+    else if (minutes_difference > 15) punctuality_status = 'Late';
 
     // Create attendance record
     const { data: newRecord, error } = await client
@@ -143,14 +161,16 @@ export class RecognitionProcessingService {
         time: currentTime,
         service_type: serviceType,
         status: 'Present',
-        marked_by: `AI (${cameraName})`
+        marked_by: `AI (${cameraName})`,
+        punctuality_status,
+        minutes_difference,
       })
       .select()
       .single();
 
     if (error) {
       this.logger.error(`Failed to record attendance in database`, error.message);
-      return;
+      return false;
     }
 
     // Emit live Socket.io event to frontend UI
@@ -162,6 +182,7 @@ export class RecognitionProcessingService {
       serviceType,
       status: 'Present'
     });
+    return false; // not "already marked", it was a fresh mark!
   }
 
   /**
@@ -245,12 +266,25 @@ export class RecognitionProcessingService {
     }
   }
 
-  private getCurrentServiceType(): string {
-    const now = new Date();
+  private getActiveServiceDetails(now: Date): { name: string, startTimeHour: number, startTimeMinute: number } {
     const day = now.getDay();
-    if (day === 0) return 'Sunday Morning Service';
-    if (day === 3) return 'Midweek Bible Study';
-    return 'General Gathering';
+    const hour = now.getHours();
+    const mins = now.getMinutes();
+    const currentMins = hour * 60 + mins;
+
+    if (day === 0) { // Sunday
+      if (currentMins >= 6 * 60 && currentMins < 10 * 60) return { name: 'Sunday First Service', startTimeHour: 8, startTimeMinute: 0 };
+      if (currentMins >= 10 * 60 && currentMins <= 14 * 60) return { name: 'Sunday Second Service', startTimeHour: 10, startTimeMinute: 0 };
+    } else if (day === 2) { // Tuesday
+      if (currentMins >= 7 * 60 && currentMins <= 14 * 60) return { name: 'Breakthrough Service', startTimeHour: 9, startTimeMinute: 0 };
+    } else if (day === 4) { // Thursday
+      if (currentMins >= 15 * 60 && currentMins <= 21 * 60) return { name: 'Empowerment Service', startTimeHour: 17, startTimeMinute: 30 };
+    } else if (day === 6) { // Saturday
+      if (currentMins >= 7 * 60 && currentMins <= 13 * 60) return { name: 'Fire Service', startTimeHour: 9, startTimeMinute: 0 };
+    }
+    
+    // Fallback if checked in outside normal hours (e.g., testing or special event)
+    return { name: 'General Gathering / Testing', startTimeHour: hour, startTimeMinute: 0 };
   }
 
   private async getCameraLocation(cameraId: string): Promise<string> {
