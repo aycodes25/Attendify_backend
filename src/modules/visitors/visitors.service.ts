@@ -80,45 +80,44 @@ export class VisitorsService {
       throw new HttpException('Visitor not found', HttpStatus.NOT_FOUND);
     }
 
-    // 2. Create the member record
+    // 2. Create the member record with all provided fields
     const member = await this.membersService.create({
-      ...memberData,
-      profilePhotoUrl: visitor.captured_face_url,
+      firstName: memberData.firstName,
+      lastName: memberData.lastName,
+      phoneNumber: memberData.phoneNumber,
+      email: memberData.email,
+      gender: memberData.gender,
+      dateOfBirth: memberData.dateOfBirth,
+      department: memberData.department,
+      profilePhotoUrl: visitor.captured_face_url || null,
       status: 'Active',
     });
 
-    try {
-      // 3. Download visitor image from storage to extract/copy the embedding
-      // For simplicity, we can fetch the embedding array stored in visitors or recreate it,
-      // but wait! The visitors table doesn't store the embedding directly, only the photo url.
-      // However, we can fetch the image buffer using fetch or from Supabase storage and compute the embedding again!
-      // This is extremely clean and works because we have the file url or file path.
-      // Let's resolve the path from public URL:
-      // visitor.captured_face_url is like "http://.../storage/v1/object/public/visitor-images/crops/uuid_crop.jpg"
-      // The file path inside bucket 'visitor-images' is "crops/uuid_crop.jpg".
-      // We can download it from Supabase storage directly!
-      const cropPath = visitor.captured_face_url.split('/visitor-images/')[1];
-      
-      if (cropPath) {
-        const { data: fileData, error: downloadErr } = await client.storage
-          .from('visitor-images')
-          .download(cropPath);
+    // 3. Attempt to copy face embedding from visitor image (best-effort, non-blocking)
+    if (visitor.captured_face_url) {
+      try {
+        const cropPath = visitor.captured_face_url.split('/visitor-images/')[1];
 
-        if (!downloadErr && fileData) {
-          const fileBuffer = Buffer.from(await fileData.arrayBuffer());
-          
-          // Register face image using the downloaded buffer
-          await this.membersService.registerFaceImage(
-            member.id,
-            'front',
-            fileBuffer,
-            `${visitorId}_front.jpg`
-          );
+        if (cropPath) {
+          const { data: fileData, error: downloadErr } = await client.storage
+            .from('visitor-images')
+            .download(cropPath);
+
+          if (!downloadErr && fileData) {
+            const fileBuffer = Buffer.from(await fileData.arrayBuffer());
+
+            await this.membersService.registerFaceImage(
+              member.id,
+              'front',
+              fileBuffer,
+              `${visitorId}_front.jpg`
+            );
+          }
         }
+      } catch (err) {
+        // Log error but do not crash member creation — face can be re-registered later
+        console.error('Failed to copy visitor face embedding to member faces:', err?.message || err);
       }
-    } catch (err) {
-      // Log error but do not crash member creation
-      console.error('Failed to copy visitor face embedding to member faces', err);
     }
 
     // 4. Update visitor status to 'Registered'
@@ -127,3 +126,4 @@ export class VisitorsService {
     return member;
   }
 }
+
