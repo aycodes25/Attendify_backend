@@ -16,7 +16,7 @@ export class MembersService {
     let query = client.from('members').select('*', { count: 'exact' });
 
     if (filters.search) {
-      query = query.ilike('full_name', `%${filters.search}%`);
+      query = query.or(`first_name.ilike.%${filters.search}%,last_name.ilike.%${filters.search}%`);
     }
     if (filters.department) {
       query = query.eq('department', filters.department);
@@ -71,13 +71,11 @@ export class MembersService {
     status?: string;
     profilePhotoUrl?: string;
   }) {
-    const fullName = `${body.firstName} ${body.lastName}`;
     const { data, error } = await this.supabaseService.getClient()
       .from('members')
       .insert({
         first_name: body.firstName,
         last_name: body.lastName,
-        full_name: fullName,
         phone_number: body.phoneNumber || null,
         email: body.email || null,
         gender: body.gender,
@@ -100,12 +98,6 @@ export class MembersService {
     const updateData: any = {};
     if (body.firstName !== undefined) updateData.first_name = body.firstName;
     if (body.lastName !== undefined) updateData.last_name = body.lastName;
-    if (body.firstName !== undefined || body.lastName !== undefined) {
-      const { data: current } = await this.supabaseService.getClient().from('members').select('first_name, last_name').eq('id', id).single();
-      const first = body.firstName !== undefined ? body.firstName : current.first_name;
-      const last = body.lastName !== undefined ? body.lastName : current.last_name;
-      updateData.full_name = `${first} ${last}`;
-    }
     if (body.phoneNumber !== undefined) updateData.phone_number = body.phoneNumber;
     if (body.email !== undefined) updateData.email = body.email;
     if (body.gender !== undefined) updateData.gender = body.gender;
